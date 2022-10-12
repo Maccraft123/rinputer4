@@ -3,6 +3,9 @@ use evdev::{
     InputEvent,
     Key
 };
+use crate::source::{
+    SourceCaps,
+};
 use crate::source::EventSource;
 use anyhow::Result;
 use std::{
@@ -130,5 +133,24 @@ impl EventSource for Evdev {
     }
     fn close(self: Evdev) {
 
+    }
+    fn get_capabilities(&self) -> SourceCaps {
+        if let Some(keys) = self.device.supported_keys() {
+            if keys.contains(Key::BTN_SOUTH) {
+                if let Some(axes) = self.device.supported_absolute_axes() {
+                    if axes.contains(AbsoluteAxisType::ABS_X) && axes.contains(AbsoluteAxisType::ABS_Y) {
+                        SourceCaps::FullX360
+                    } else {
+                        SourceCaps::DpadAndAB
+                    }
+                } else {
+                    SourceCaps::DpadAndAB
+                }
+            } else {
+                SourceCaps::DpadAndAB
+            }
+        } else {
+            SourceCaps::FullX360
+        }
     }
 }
