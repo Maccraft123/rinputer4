@@ -7,6 +7,7 @@ use std::{
 use anyhow::Result;
 use crate::source::event::Evdev;
 
+mod quirks_db;
 pub mod event;
 
 #[derive(Debug)]
@@ -16,13 +17,11 @@ pub enum SourceCaps {
 }
 
 pub trait EventSource: Send + Sync {
-    fn start_ev(&self, output_channel: mpsc::Sender<InputEvent>) -> Result<()>;
+    fn start_ev(self, output_channel: mpsc::Sender<InputEvent>);
     
     fn name(&self) -> String;
     fn path(&self) -> String;
     
-    fn close(self);
-
     fn get_capabilities(&self) -> SourceCaps;
 }
 
