@@ -217,8 +217,10 @@ fn worker(mut dev: Evdev, out: Sender<InputEvent>) {
 }
 
 impl EventSource for Evdev {
-    fn start_ev(self: Evdev, output_channel: Sender<InputEvent>) {
-        std::thread::spawn(|| worker(self, output_channel));
+    fn start_ev(self: Box<Evdev>) -> Receiver<InputEvent> {
+        let (tx, rx) = channel();
+        std::thread::spawn(|| worker(*self, tx));
+        rx
     }
     fn name(self: &Evdev) -> String {
         if let Some(n) = self.override_name.clone() {

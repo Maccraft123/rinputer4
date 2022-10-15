@@ -3,6 +3,7 @@ use std::{
     fmt,
     sync::mpsc,
 };
+use crate::{OpenedEventSource, source::SourceCaps};
 
 use anyhow::Result;
 
@@ -10,14 +11,14 @@ pub mod uinput;
 use uinput::UinputSink;
 
 pub trait Sink: Send + Sync {
-    fn new() -> Box<dyn Sink> where Self: Sized;
-    fn add_chan(&mut self, input: mpsc::Receiver<InputEvent>);
-    fn name(&self) -> String;
+    fn name(&self) -> &str;
+    fn new(source: OpenedEventSource) -> Box<dyn Sink> where Self: Sized;
+    fn source_name(&self) -> String;
+    fn source_caps(&self) -> SourceCaps;
 }
 
-pub fn list_names() -> Vec<(String, fn() -> Box<dyn Sink>)> {
-
+pub fn list_names() -> Vec<(String, fn(OpenedEventSource) -> Box<dyn Sink>)> {
     vec![
-        (UinputSink::new().name(), UinputSink::new),
+        ("Gamepad device".to_string(), UinputSink::new),
     ]
 }
