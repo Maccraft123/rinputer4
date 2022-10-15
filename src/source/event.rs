@@ -102,6 +102,26 @@ fn get_device_quirks(dev: &Device) -> Vec<EvdevQuirks> {
                    .map(|v| EvdevQuirks::RemapCodes(v)));
     }
 
+    if let Some(name) = dev.name() {
+        if name.contains("Left Joy-Con") {
+            let remaps = vec![
+                InputRemap::KeyToAbs(Key::BTN_TL2, AbsoluteAxisType::ABS_Z),
+                InputRemap::KeyToKey(Key::BTN_Z, Key::BTN_START),
+
+                InputRemap::KeyToAbs(Key::BTN_DPAD_LEFT, AbsoluteAxisType::ABS_HAT0X),
+                InputRemap::KeyToAbs(Key::BTN_DPAD_RIGHT, AbsoluteAxisType::ABS_HAT0X),
+                InputRemap::KeyToAbs(Key::BTN_DPAD_DOWN, AbsoluteAxisType::ABS_HAT0Y),
+                InputRemap::KeyToAbs(Key::BTN_DPAD_UP, AbsoluteAxisType::ABS_HAT0Y),
+            ];
+            ret.extend(remaps.into_iter().map(|v| EvdevQuirks::RemapCodes(v)));
+        } else {
+            let remaps = vec![
+                InputRemap::KeyToAbs(Key::BTN_TR2, AbsoluteAxisType::ABS_RZ),
+            ];
+            ret.extend(remaps.into_iter().map(|v| EvdevQuirks::RemapCodes(v)));
+        }
+    }
+
     ret
 }
 
@@ -117,6 +137,12 @@ pub struct Evdev {
 
 unsafe impl Send for Evdev{}
 unsafe impl Sync for Evdev{}
+
+impl Drop for Evdev {
+    fn drop(&mut self) {
+        self.device.ungrab().unwrap();
+    }
+}
 
 impl Evdev {
     fn new(path: PathBuf, mut device: Device) -> Option<Self> {
@@ -134,7 +160,6 @@ impl Evdev {
 
         let quirks = get_device_quirks(&device);
 
-        println!("Device quirks found: {:#?}", &quirks);
         for quirk in quirks {
             match quirk {
                 EvdevQuirks::RemapCodes(v)          => remap_events.push(v),
@@ -179,14 +204,14 @@ fn worker(mut dev: Evdev) {
         for ev in raw_dev.fetch_events().unwrap() {
             if !skip_remap {
                 if let Some(new) = dev.remap_events.iter().find_map(|v| v.apply_quirk(ev)) {
-                    if dev.tx.send(ev).is_err() {
+                    if dev.tx.send(new).is_err() {
                         break;
                     }
+                    continue;
                 }
-            } else {
-                if dev.tx.send(ev).is_err() {
-                    break;
-                }
+            }
+            if dev.tx.send(ev).is_err() {
+                break;
             }
         }
     }

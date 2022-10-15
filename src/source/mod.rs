@@ -2,6 +2,8 @@ use evdev::{
     Key,
     InputEvent,
     InputEventKind,
+    AbsoluteAxisType,
+    EventType,
 };
 use std::{
     fmt,
@@ -95,6 +97,107 @@ impl TwoJoycons {
     }
 }
 
+fn joycon_ev_middleman(dev: OpenedEventSource, out: mpsc::Sender<InputEvent>) {
+    let mut last_hatx = 0;
+    let mut last_haty = 0;
+    let is_right = dev.name.contains("Right");
+    loop {
+        for ev in dev.chan.recv() {
+            match ev.kind() {
+                InputEventKind::Key(key) => {
+                    if is_right {
+                        match key {
+                            Key::BTN_EAST => out.send(InputEvent::new(EventType::KEY, Key::BTN_SOUTH.0, ev.value())),
+                            Key::BTN_WEST => out.send(InputEvent::new(EventType::KEY, Key::BTN_NORTH.0, ev.value())),
+                            Key::BTN_SOUTH => out.send(InputEvent::new(EventType::KEY, Key::BTN_WEST.0, ev.value())),
+                            Key::BTN_NORTH => out.send(InputEvent::new(EventType::KEY, Key::BTN_EAST.0, ev.value())),
+                            Key::BTN_TL2 => out.send(InputEvent::new(EventType::KEY, Key::BTN_TR.0, ev.value())),
+                            Key::BTN_TR => continue,
+                            Key::BTN_MODE => out.send(InputEvent::new(EventType::KEY, Key::BTN_SELECT.0, ev.value())),
+                            _ => out.send(ev),
+                        }.unwrap();
+                    } else {
+                        match key {
+                            Key::BTN_TR => out.send(InputEvent::new(EventType::KEY, Key::BTN_TL.0, ev.value())),
+                            Key::BTN_TR2 => out.send(InputEvent::new(EventType::KEY, Key::BTN_TR.0, ev.value())),
+                            Key::BTN_TL => continue,
+                            _ => out.send(ev),
+                        }.unwrap();
+                    }
+                },
+                InputEventKind::AbsAxis(abs) => {
+                    match abs {
+                        AbsoluteAxisType::ABS_HAT0X => {
+                            match ev.value() {
+                                1 => {
+                                    out.send(InputEvent::new(EventType::KEY, Key::BTN_NORTH.0, 1));
+                                },
+                                0 => {
+                                    out.send(InputEvent::new(EventType::KEY, Key::BTN_NORTH.0, 0));
+                                    out.send(InputEvent::new(EventType::KEY, Key::BTN_SOUTH.0, 0));
+                                },
+                                -1 => {
+                                    out.send(InputEvent::new(EventType::KEY, Key::BTN_SOUTH.0, 1));
+                                },
+                                _ => unreachable!("Joycons can't make these events"),
+                            }
+                        },
+                        AbsoluteAxisType::ABS_HAT0Y => {
+                            match ev.value() {
+                                1 => {
+                                    out.send(InputEvent::new(EventType::KEY, Key::BTN_EAST.0, 1));
+                                },
+                                0 => {
+                                    out.send(InputEvent::new(EventType::KEY, Key::BTN_EAST.0, 0));
+                                    out.send(InputEvent::new(EventType::KEY, Key::BTN_WEST.0, 0));
+                                },
+                                -1 => {
+                                    out.send(InputEvent::new(EventType::KEY, Key::BTN_WEST.0, 1));
+                                },
+                                _ => unreachable!("Joycons can't make these events"),
+                            }
+                        },
+                        AbsoluteAxisType::ABS_Y | AbsoluteAxisType::ABS_RY
+                        | AbsoluteAxisType::ABS_X | AbsoluteAxisType::ABS_RX => {
+                            let code: u16;
+                            let mut mult: i32;
+                            let last: &mut i32;
+                            if abs == AbsoluteAxisType::ABS_X || abs == AbsoluteAxisType::ABS_Y {
+                                mult = 1;
+                            } else {
+                                mult = -1;
+                            }
+
+                            if abs == AbsoluteAxisType::ABS_RX || abs == AbsoluteAxisType::ABS_X {
+                                code = AbsoluteAxisType::ABS_HAT0X.0;
+                                last = &mut last_hatx;
+                                mult *= -1;
+                            } else {
+                                code = AbsoluteAxisType::ABS_HAT0Y.0;
+                                last = &mut last_haty;
+                            }
+
+                            let val = if ev.value() < -10000 {
+                                -1 * mult
+                            } else if ev.value() > 10000 {
+                                1 * mult
+                            } else {
+                                0
+                            };
+                            if *last != val {
+                                out.send(InputEvent::new(EventType::ABSOLUTE, code, val));
+                                *last = val;
+                            }
+                        }
+                        _ => continue,
+                    }
+                },
+                _ => out.send(ev).unwrap(),
+            }
+        }
+    }
+}
+
 // TL from left + TR from right = both
 // TR from left + TR2 from left = left
 // TL from right + TL2 from right = right
@@ -126,15 +229,11 @@ fn actually_wait_joycon(mut maybe_left: Option<OpenedEventSource>, mut maybe_rig
         }
         if let Some(ref left) = maybe_left {
             if let Ok(ev) = left.chan.try_recv() {
+                println!("{:#?}", ev);
                 match ev.kind() {
-                    InputEventKind::Key(key) => {
-                        match key {
-                            Key::BTN_TL => left_tl = ev.value() != 0,
-                            Key::BTN_TR => left_tr = ev.value() != 0,
-                            Key::BTN_TR2 => left_tr2 = ev.value() != 0,
-                            _ => (),
-                        }
-                    },
+                    InputEventKind::Key(Key::BTN_TL) => left_tl = ev.value() != 0,
+                    InputEventKind::Key(Key::BTN_TR) => left_tr = ev.value() != 0,
+                    InputEventKind::Key(Key::BTN_TR2) => left_tr2 = ev.value() != 0,
                     _ => (),
                 }
             }
@@ -144,6 +243,7 @@ fn actually_wait_joycon(mut maybe_left: Option<OpenedEventSource>, mut maybe_rig
             // combine both devices
             let mut left = maybe_left.unwrap();
             let mut right = maybe_right.unwrap();
+
             left.caps = SourceCaps::FullX360;
             left.name = String::from("Nintendo Switch Both Joy-Cons");
 
@@ -162,11 +262,39 @@ fn actually_wait_joycon(mut maybe_left: Option<OpenedEventSource>, mut maybe_rig
             return;
         }
         if left_tr && left_tr2 {
-            out.send(maybe_left.unwrap());
+            let left = maybe_left.unwrap();
+            
+            let (tx, rx) = mpsc::channel();
+            let tx_2 = tx.clone();
+            let new_left = OpenedEventSource {
+                name: left.name.clone(),
+                path: left.path.clone(),
+                caps: left.caps,
+                chan: rx,
+                chan_tx: tx,
+            };
+
+            std::thread::spawn(move || joycon_ev_middleman(left, tx_2));
+
+            out.send(new_left);
             return;
         }
         if right_tl && right_tl2 {
-            out.send(maybe_right.unwrap());
+            let right = maybe_right.unwrap();
+            
+            let (tx, rx) = mpsc::channel();
+            let tx_2 = tx.clone();
+            let new_right = OpenedEventSource {
+                name: right.name.clone(),
+                path: right.path.clone(),
+                caps: right.caps,
+                chan: rx,
+                chan_tx: tx,
+            };
+
+            std::thread::spawn(move || joycon_ev_middleman(right, tx_2));
+
+            out.send(new_right);
             return;
         }
     }

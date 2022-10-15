@@ -30,14 +30,39 @@ impl InputRemap {
         if let InputEventKind::Key(input_key) = input.kind() {
             match self {
                 InputRemap::KeyToKey(my_key, output_key) => {
-                    return Some(InputEvent::new(EventType::KEY, input.code(), input.value()));
+                    if my_key != input_key {
+                        return None;
+                    } else {
+                        return Some(InputEvent::new(EventType::KEY, input.code(), input.value()));
+                    }
                 },
-                InputRemap::KeyToAbs(my_key, abs) => todo!("Mapping to absolute axis"),
+                InputRemap::KeyToAbs(my_key, abs) => {
+                    if my_key != input_key {
+                        return None;
+                    }
+                    match abs {
+                        AbsoluteAxisType::ABS_Z | AbsoluteAxisType::ABS_RZ => return Some(InputEvent::new(EventType::ABSOLUTE, abs.0, 255*input.value())),
+                        AbsoluteAxisType::ABS_HAT0X | AbsoluteAxisType::ABS_HAT0Y => {
+                            if input.value() == 0 {
+                                return Some(InputEvent::new(EventType::ABSOLUTE, abs.0, 0));
+                            }
+                            let val = match input_key {
+                                Key::BTN_DPAD_RIGHT => 1,
+                                Key::BTN_DPAD_LEFT => -1,
+                                Key::BTN_DPAD_UP => -1,
+                                Key::BTN_DPAD_DOWN => 1,
+                                _ => return None,
+                            };
+                            return Some(InputEvent::new(EventType::ABSOLUTE, abs.0, val));
+                        },
+                        _ => return None,
+                    }
+                },
                 InputRemap::KeyToQuickAccessMenu(my_key) => todo!("steam quick access menu"),
                 _ => return None,
             }
-        }
-        unreachable!("Should've returned before");
+        };
+        None
     }
 }
 
