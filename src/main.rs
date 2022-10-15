@@ -54,11 +54,18 @@ fn handle_client(mut stream: TcpStream, all_sinks_mutex: Arc<Mutex<Vec<Box<dyn S
                         .map(|v| source::into_opened(v))
                         .collect::<Vec<OpenedEventSource>>();
                     let new_source = source::wait_for_lr(cur_sources);
-
-
-                    all_sinks.push(new_fn(new_source));
+                    match new_fn(new_source) {
+                        Ok(sink) => {
+                            all_sinks.push(sink);
+                            stream.write_all(b"OK\n");
+                        }
+                        Err(e) => {
+                            eprintln!("Failed making a new sink:");
+                            eprintln!("{}", e);
+                            stream.write_all(b"ERR\n");
+                        }
+                    };
                 }
-                stream.write_all(b"OK\n").unwrap()
             },
             "list_sink_types" => {
                 for (i, (name, _)) in sink_types.iter().enumerate() {
