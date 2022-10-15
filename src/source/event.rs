@@ -111,6 +111,8 @@ pub struct Evdev {
     override_name: Option<String>,
     remap_events: Vec<InputRemap>,
     sibling_device: Option<Device>,
+    tx: Sender<InputEvent>,
+    rx: Option<Receiver<InputEvent>>,
 }
 
 unsafe impl Send for Evdev{}
@@ -141,12 +143,15 @@ impl Evdev {
             };
         }
 
+        let (tx, rx) = channel();
         Some(Self {
             device,
             path,
             override_name,
             remap_events,
             sibling_device: None,
+            tx,
+            rx: Some(rx),
         })
     }
 }
@@ -166,7 +171,7 @@ pub fn enumerate() -> (Vec<Box<dyn EventSource>>, Receiver<Evdev>) {
     (ret, rx)
 }
 
-fn worker(mut dev: Evdev, out: Sender<InputEvent>) {
+fn worker(mut dev: Evdev) {
     let raw_dev = &mut dev.device;
     let skip_remap = dev.remap_events.is_empty();
     let skip_mult = true; // TODO
@@ -174,12 +179,12 @@ fn worker(mut dev: Evdev, out: Sender<InputEvent>) {
         for ev in raw_dev.fetch_events().unwrap() {
             if !skip_remap {
                 if let Some(new) = dev.remap_events.iter().find_map(|v| v.apply_quirk(ev)) {
-                    if out.send(ev).is_err() {
+                    if dev.tx.send(ev).is_err() {
                         break;
                     }
                 }
             } else {
-                if out.send(ev).is_err() {
+                if dev.tx.send(ev).is_err() {
                     break;
                 }
             }
@@ -188,10 +193,13 @@ fn worker(mut dev: Evdev, out: Sender<InputEvent>) {
 }
 
 impl EventSource for Evdev {
-    fn start_ev(self: Box<Evdev>) -> Receiver<InputEvent> {
-        let (tx, rx) = channel();
-        std::thread::spawn(|| worker(*self, tx));
-        rx
+    fn make_tx(&self) -> Sender<InputEvent> {
+        self.tx.clone()
+    }
+    fn start_ev(mut self: Box<Evdev>) -> Receiver<InputEvent> {
+        let rx = self.rx.take();
+        std::thread::spawn(|| worker(*self));
+        rx.unwrap()
     }
     fn name(self: &Evdev) -> String {
         if let Some(n) = self.override_name.clone() {
