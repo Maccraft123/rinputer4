@@ -215,7 +215,6 @@ fn actually_wait_joycon(maybe_left: Option<OpenedEventSource>, maybe_right: Opti
         }
         if let Some(ref left) = maybe_left {
             if let Ok(ev) = left.chan.try_recv() {
-                println!("{:#?}", ev);
                 match ev.kind() {
                     InputEventKind::Key(Key::BTN_TL) => left_tl = ev.value() != 0,
                     InputEventKind::Key(Key::BTN_TR) => left_tr = ev.value() != 0,
