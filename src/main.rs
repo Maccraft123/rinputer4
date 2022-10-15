@@ -25,6 +25,7 @@ use crate::{
 static HELP_TEXT: &[u8] = b"Available commands are:
 list_sinks: Lists all sinks in use with sources attached to them
 add_sink: Adds a sink and autobinds a source
+del_sink: Removes a sink
 list_sink_types: Lists sink types that can be added with add_sink
 help: Displays this message
 ";
@@ -61,6 +62,12 @@ fn handle_client(mut stream: TcpStream, all_sinks_mutex: Arc<Mutex<Vec<Box<dyn S
                     }
                 };
             },
+            "del_sink" => {
+                let mut all_sinks = all_sinks_mutex.lock().unwrap();
+                let victim = args[1].parse::<usize>()?;
+                all_sinks.remove(victim);
+                stream.write_all(b"OK\n")?;
+            }
             "list_sink_types" => {
                 for (i, (name, _)) in sink_types.iter().enumerate() {
                     let tmp = format!("OK:{}:{}", i, name);

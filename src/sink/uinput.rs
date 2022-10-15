@@ -2,6 +2,7 @@ use crate::{
     sink::Sink,
     source::{OpenedEventSource, SourceCaps},
 };
+use std::sync::Arc;
 use evdev::{
     uinput::{
         VirtualDeviceBuilder,
@@ -18,6 +19,7 @@ use anyhow::Result;
 pub struct UinputSink {
     source_name: String,
     source_caps: SourceCaps,
+    _ptr: Arc<()>,
     //todo
 }
 
@@ -30,8 +32,12 @@ static MAX_OUT_HAT: i32 = 1;
 static MIN_OUT_TRIG: i32 = 0;
 static MAX_OUT_TRIG: i32 = 255;
 
-fn sink_worker(src: OpenedEventSource, mut dst: VirtualDevice) {
+fn sink_worker(src: OpenedEventSource, mut dst: VirtualDevice, ptr: Arc<()>) {
     loop {
+        // if the UinputSink was dropped quit
+        if Arc::strong_count(&ptr) < 2 {
+            return;
+        }
         match src.chan.recv() {
             Ok(ev) => dst.emit(&[ev]).unwrap(),
             Err(_) => return, // assume we got dropped
@@ -89,12 +95,16 @@ impl Sink for UinputSink {
 
         // TODO: map abs axis values
 
+        let ptr = Arc::new(());
+        let ptr2 = Arc::clone(&ptr);
+
         let out = Box::new(UinputSink{
             source_name: source.name.clone(),
             source_caps: source.caps,
+            _ptr: ptr,
         });
 
-        std::thread::spawn(|| sink_worker(source, uinput_handle));
+        std::thread::spawn(|| sink_worker(source, uinput_handle, ptr2));
         Ok(out)
     }
     fn source_name(&self) -> String {
