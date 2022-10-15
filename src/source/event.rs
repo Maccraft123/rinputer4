@@ -7,7 +7,10 @@ use evdev::{
 use crate::source::{
     EventSource,
     SourceCaps,
-    quirks_db,
+    quirks_db::{
+        self,
+        InputRemap,
+    },
 };
 use anyhow::Result;
 use std::{
@@ -71,68 +74,20 @@ fn usb_manufacturer_product(input: String) -> Option<String> {
     None
 }
 
-fn get_dmi(name: &str) -> String {
-    let path = format!("/sys/class/dmi/id/{}", name);
-    match std::fs::read_to_string(&path) {
-        Ok(s) => s.lines().next().unwrap_or("<failed to read>").to_string(),
-        Err(_) => "<failed to read>".to_string()
-    }
-}
-
-fn match_str(inp: &str, x: &str, relaxed: bool) -> bool {
-    if inp.is_empty() {
-        true
-    } else {
-        if relaxed {
-            inp.contains(x) || x.contains(inp)
-        } else {
-            inp == x
-        }
-    }
-}
-
-fn internal_controller_name(phys_path: &str) -> Option<String> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let dmi_names = quirks_db::dmi();
-
-        let product_name = get_dmi("product_name");
-        let product_vendor = get_dmi("product_vendor");
-        let board_name = get_dmi("board_name");
-        let board_vendor = get_dmi("board_vendor");
-
-        for dev in dmi_names {
-            let pn_match = match_str(&dev.product_name, &product_name, dev.relaxed_name);
-            let pv_match = match_str(&dev.product_vendor, &product_vendor, dev.relaxed_vendor);
-            let bn_match = match_str(&dev.board_name, &board_name, dev.relaxed_name);
-            let bv_match = match_str(&dev.board_vendor, &board_vendor, dev.relaxed_vendor);
-            if pn_match && pv_match && bn_match && bv_match {
-                if phys_path.contains(dev.phys_path) {
-                    return Some("Internal controller".to_string());
-                } else {
-                    eprintln!("Found matches for all dmi strings, phys path didn't match");
-                    eprintln!("Got: '{}'", phys_path);
-                    eprintln!("Expected '{}'", dev.phys_path);
-                }
-            }
-        }
-    }
-    None
-}
-
 #[derive(Debug)]
 enum EvdevQuirks {
-    RemapCodes{from: u16, to: u16},
+    RemapCodes(InputRemap),
     //MergeWithDevice(Device),
     OverrideName(String),
 }
 
 fn get_device_quirks(dev: &Device) -> Vec<EvdevQuirks> {
     let mut ret = Vec::new();
+    let dmi_quirk = quirks_db::get_dmi_quirk();
 
     if let Some(phys_path) = dev.physical_path() {
-        if let Some(name) = internal_controller_name(&phys_path) {
-            let quirk = EvdevQuirks::OverrideName(name);
+        if dmi_quirk.is_some() {
+            let quirk = EvdevQuirks::OverrideName("Built-in Controller".to_string());
             ret.push(quirk);
         } else {
             if let Some(name) = usb_manufacturer_product(phys_path.to_string()) {
@@ -142,6 +97,11 @@ fn get_device_quirks(dev: &Device) -> Vec<EvdevQuirks> {
         }
     }
 
+    if let Some(actual_dmi_quirk) = dmi_quirk {
+        ret.extend(actual_dmi_quirk.remap_codes.into_iter()
+                   .map(|v| EvdevQuirks::RemapCodes(v)));
+    }
+
     ret
 }
 
@@ -149,7 +109,7 @@ pub struct Evdev {
     device: Device,
     path: PathBuf,
     override_name: Option<String>,
-    remap_events: Option<HashMap<u16, u16>>,
+    remap_events: Vec<InputRemap>,
     sibling_device: Option<Device>,
 }
 
@@ -168,13 +128,15 @@ impl Evdev {
         //fs::remove_file(&path).ok()?;
 
         let mut override_name = None;
-        let mut remap_events = HashMap::new();
+        let mut remap_events = Vec::new();
 
         let quirks = get_device_quirks(&device);
+
+        println!("Device quirks found: {:#?}", &quirks);
         for quirk in quirks {
             match quirk {
-                EvdevQuirks::RemapCodes{from, to}   => { remap_events.insert(from, to); },
-                //EvdevQuirks::MergeWithDevice(_)     => todo!("merging with other input device"),
+                EvdevQuirks::RemapCodes(v)          => remap_events.push(v),
+                //EvdevQuirks::MergeWithDevice(_)   => todo!("merging with other input device"),
                 EvdevQuirks::OverrideName(new)      => override_name = Some(new),
             };
         }
@@ -183,7 +145,7 @@ impl Evdev {
             device,
             path,
             override_name,
-            remap_events: if remap_events.is_empty() { None } else { Some(remap_events) },
+            remap_events,
             sibling_device: None,
         })
     }
@@ -206,11 +168,20 @@ pub fn enumerate() -> (Vec<Box<dyn EventSource>>, Receiver<Evdev>) {
 
 fn worker(mut dev: Evdev, out: Sender<InputEvent>) {
     let raw_dev = &mut dev.device;
+    let skip_remap = dev.remap_events.is_empty();
+    let skip_mult = true; // TODO
     loop {
         for ev in raw_dev.fetch_events().unwrap() {
-            let ret = out.send(ev);
-            if ret.is_err() {
-                break;
+            if !skip_remap {
+                if let Some(new) = dev.remap_events.iter().find_map(|v| v.apply_quirk(ev)) {
+                    if out.send(ev).is_err() {
+                        break;
+                    }
+                }
+            } else {
+                if out.send(ev).is_err() {
+                    break;
+                }
             }
         }
     }
