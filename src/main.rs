@@ -4,11 +4,9 @@ mod sink;
 use std::net::{
     TcpListener,
     TcpStream,
-    Shutdown,
 };
 use std::io::{
     self,
-    Read,
     BufReader,
     BufRead,
     Write,
@@ -17,6 +15,7 @@ use std::sync::{
     Arc,
     Mutex,
 };
+use anyhow::Result;
 
 use crate::{
     sink::Sink,
@@ -30,61 +29,56 @@ list_sink_types: Lists sink types that can be added with add_sink
 help: Displays this message
 ";
 
-fn handle_client(mut stream: TcpStream, all_sinks_mutex: Arc<Mutex<Vec<Box<dyn Sink>>>>) {
+fn handle_client(mut stream: TcpStream, all_sinks_mutex: Arc<Mutex<Vec<Box<dyn Sink>>>>) -> Result<()> {
     let sink_types = sink::list_names();
 
     loop {
         let mut buf = String::new();
         let mut buf_reader = BufReader::new(&mut stream);
-
-        let ret = buf_reader.read_line(&mut buf);
-        if ret.is_err() {
-            return;
-        }
+        buf_reader.read_line(&mut buf)?;
 
         let args: Vec<&str> = buf.trim().split(' ').collect();
 
         match args[0] {
             "add_sink" => {
-                if let Ok(snk_type) = args[1].parse::<usize>() {
-                    let mut all_sinks = all_sinks_mutex.lock().unwrap();
-                    let (_, new_fn) = sink_types[snk_type];
+                let snk_type = args[1].parse::<usize>()?;
+                let mut all_sinks = all_sinks_mutex.lock().unwrap();
+                let (_, new_fn) = sink_types[snk_type];
 
-                    let cur_sources = source::enumerate().into_iter()
-                        .map(|v| source::into_opened(v))
-                        .collect::<Vec<OpenedEventSource>>();
-                    let new_source = source::wait_for_lr(cur_sources);
-                    match new_fn(new_source) {
-                        Ok(sink) => {
-                            all_sinks.push(sink);
-                            stream.write_all(b"OK\n");
-                        }
-                        Err(e) => {
-                            eprintln!("Failed making a new sink:");
-                            eprintln!("{}", e);
-                            stream.write_all(b"ERR\n");
-                        }
-                    };
-                }
+                let cur_sources = source::enumerate().into_iter()
+                    .map(|v| source::into_opened(v))
+                    .collect::<Vec<OpenedEventSource>>();
+                let new_source = source::wait_for_lr(cur_sources);
+                match new_fn(new_source) {
+                    Ok(sink) => {
+                        all_sinks.push(sink);
+                        stream.write_all(b"OK\n")?;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed making a new sink:");
+                        eprintln!("{}", e);
+                        stream.write_all(b"ERR\n")?;
+                    }
+                };
             },
             "list_sink_types" => {
                 for (i, (name, _)) in sink_types.iter().enumerate() {
                     let tmp = format!("OK:{}:{}", i, name);
-                    stream.write_all(tmp.as_str().as_bytes());
-                    stream.write_all(b"\n").unwrap();
+                    stream.write_all(tmp.as_str().as_bytes())?;
+                    stream.write_all(b"\n")?;
                 }
-                stream.write_all(b"END_MULTILINE\n").unwrap();
+                stream.write_all(b"END_MULTILINE\n")?;
             },
             "list_sinks" => {
                 let all_sinks = all_sinks_mutex.lock().unwrap();
                 for (i, sink) in all_sinks.iter().enumerate() {
                     let response = format!("OK:{}:{}:{}\n", i, sink.name(), sink.source_name());
-                    stream.write_all(response.as_str().as_bytes()).unwrap();
+                    stream.write_all(response.as_str().as_bytes())?;
                 }
-                stream.write_all(b"END_MULTILINE\n").unwrap();
+                stream.write_all(b"END_MULTILINE\n")?;
             }
-            "help" => stream.write_all(HELP_TEXT).unwrap(),
-            _ => stream.write_all(b"ERR:Invalid command\n").unwrap(),
+            "help" => stream.write_all(HELP_TEXT)?,
+            _ => stream.write_all(b"ERR:Invalid command\n")?,
         }
 
         println!("{:#?}", args);

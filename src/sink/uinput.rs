@@ -2,11 +2,7 @@ use crate::{
     sink::Sink,
     source::{OpenedEventSource, SourceCaps},
 };
-use std::{
-    sync::{mpsc, Mutex},
-};
 use evdev::{
-    InputEvent,
     uinput::{
         VirtualDeviceBuilder,
         VirtualDevice,
@@ -77,7 +73,7 @@ impl Sink for UinputSink {
         let abs_hat_x = UinputAbsSetup::new(AbsoluteAxisType::ABS_HAT0X, abs_hat);
         let abs_hat_y = UinputAbsSetup::new(AbsoluteAxisType::ABS_HAT0Y, abs_hat);
 
-        let mut uinput_handle = VirtualDeviceBuilder::new().unwrap()
+        let uinput_handle = VirtualDeviceBuilder::new().unwrap()
             .name(source.name.as_str().as_bytes())
             .input_id(input_id)
             .with_keys(&keys)?

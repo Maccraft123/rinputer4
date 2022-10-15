@@ -1,8 +1,3 @@
-use evdev::InputEvent;
-use std::{
-    fmt,
-    sync::mpsc,
-};
 use crate::{OpenedEventSource, source::SourceCaps};
 
 use anyhow::Result;

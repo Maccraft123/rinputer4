@@ -12,11 +12,9 @@ use crate::source::{
         InputRemap,
     },
 };
-use anyhow::Result;
 use std::{
     sync::mpsc::{channel, Sender, Receiver},
-    path::PathBuf,
-    collections::HashMap,
+    path::{Path, PathBuf},
     fs,
 };
 
@@ -81,9 +79,9 @@ enum EvdevQuirks {
     OverrideName(String),
 }
 
-fn get_device_quirks(dev: &Device) -> Vec<EvdevQuirks> {
+fn get_device_quirks(dev: &Device, path: &Path) -> Vec<EvdevQuirks> {
     let mut ret = Vec::new();
-    let dmi_quirk = quirks_db::get_dmi_quirk();
+    let dmi_quirk = quirks_db::get_dmi_quirk(path);
 
     if let Some(phys_path) = dev.physical_path() {
         if dmi_quirk.is_some() {
@@ -125,9 +123,9 @@ fn get_device_quirks(dev: &Device) -> Vec<EvdevQuirks> {
     ret
 }
 
+#[allow(dead_code)]
 pub struct Evdev {
     device: Device,
-    path: PathBuf,
     override_name: Option<String>,
     remap_events: Vec<InputRemap>,
     sibling_device: Option<Device>,
@@ -140,6 +138,7 @@ unsafe impl Sync for Evdev{}
 
 impl Drop for Evdev {
     fn drop(&mut self) {
+        println!("Ungrabbing device");
         self.device.ungrab().unwrap();
     }
 }
@@ -152,13 +151,17 @@ impl Evdev {
             return None;
         }
 
+        if device.input_id().version() == 0x2137 {
+            return None;
+        }
+
         device.grab().ok()?;
         //fs::remove_file(&path).ok()?;
 
         let mut override_name = None;
         let mut remap_events = Vec::new();
 
-        let quirks = get_device_quirks(&device);
+        let quirks = get_device_quirks(&device, &path);
 
         for quirk in quirks {
             match quirk {
@@ -171,7 +174,6 @@ impl Evdev {
         let (tx, rx) = channel();
         Some(Self {
             device,
-            path,
             override_name,
             remap_events,
             sibling_device: None,
@@ -182,7 +184,7 @@ impl Evdev {
 }
 
 pub fn enumerate() -> (Vec<Box<dyn EventSource>>, Receiver<Evdev>) {
-    let (tx, rx) = channel();
+    let (_tx, rx) = channel();
     let tmp: Vec<Evdev> = evdev::enumerate()
         .filter_map(|(p, d)| Evdev::new(p, d))
         .collect();
@@ -199,19 +201,19 @@ pub fn enumerate() -> (Vec<Box<dyn EventSource>>, Receiver<Evdev>) {
 fn worker(mut dev: Evdev) {
     let raw_dev = &mut dev.device;
     let skip_remap = dev.remap_events.is_empty();
-    let skip_mult = true; // TODO
+    //let skip_mult = true; // TODO
     loop {
         for ev in raw_dev.fetch_events().unwrap() {
             if !skip_remap {
                 if let Some(new) = dev.remap_events.iter().find_map(|v| v.apply_quirk(ev)) {
                     if dev.tx.send(new).is_err() {
-                        break;
+                        return;
                     }
                     continue;
                 }
             }
             if dev.tx.send(ev).is_err() {
-                break;
+                return;
             }
         }
     }

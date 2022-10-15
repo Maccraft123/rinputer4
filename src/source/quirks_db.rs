@@ -5,6 +5,7 @@ use evdev::{
     EventType,
     InputEventKind,
 };
+use std::path::Path;
 
 #[derive(Clone, Debug)]
 pub struct DmiQuirk {
@@ -33,7 +34,7 @@ impl InputRemap {
                     if my_key != input_key {
                         return None;
                     } else {
-                        return Some(InputEvent::new(EventType::KEY, input.code(), input.value()));
+                        return Some(InputEvent::new(EventType::KEY, output_key.code(), input.value()));
                     }
                 },
                 InputRemap::KeyToAbs(my_key, abs) => {
@@ -58,8 +59,12 @@ impl InputRemap {
                         _ => return None,
                     }
                 },
-                InputRemap::KeyToQuickAccessMenu(my_key) => todo!("steam quick access menu"),
-                _ => return None,
+                InputRemap::KeyToQuickAccessMenu(my_key) => {
+                    if my_key != input_key {
+                        return None;
+                    }
+                    println!("Steam quick access menu launch goes here");
+                },
             }
         };
         None
@@ -86,7 +91,7 @@ fn match_str(inp: &str, x: &str, relaxed: bool) -> bool {
     }
 }
 
-pub fn get_dmi_quirk() -> Option<DmiQuirk> {
+pub fn get_dmi_quirk(phys_path: &Path) -> Option<DmiQuirk> {
     let quirks_vec = vec![
         DmiQuirk {
             board_vendor: "AYANEO",
@@ -127,6 +132,9 @@ pub fn get_dmi_quirk() -> Option<DmiQuirk> {
         let bn_match = match_str(&quirk.board_name, &board_name, quirk.relaxed_name);
         let bv_match = match_str(&quirk.board_vendor, &board_vendor, quirk.relaxed_vendor);
         if pn_match && pv_match && bn_match && bv_match {
+            if quirk.phys_path.is_empty() {
+                eprintln!("Note: Matched {} against empty path", phys_path.display());
+            }
             return Some(quirk);
         }
     }
